@@ -6,7 +6,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <stdlib.h>     
+#include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
@@ -47,10 +47,10 @@ int main(int argc, char **argv)
 #ifdef JADDAJADDA
            "samefs = 'y' also deduplicate against real_source that must reside in same fs as diff_source and target");
 #endif
-    printf("\nPreconditions: diff_source and target must be on same BTRFS filesystem, unpredictable amount of hard disk space is needed\n");
-    printf("\nBlock size is %d (fixed in this version)\n", blksize);
-    printf("v2\n");
-    exit(1);
+           printf("\nPreconditions: diff_source and target must be on same BTRFS filesystem, unpredictable amount of hard disk space is needed\n");
+           printf("\nBlock size is %d (fixed in this version)\n", blksize);
+           printf("v2\n");
+           exit(1);
   }
   int multiplier = 64;
   if (argc > 4)
@@ -61,7 +61,6 @@ int main(int argc, char **argv)
   if (multiplier < 1)
     pexit("multiplier", "too small");
   printf("multiplier=%d\n", multiplier);
-
 
   devfilename = argv[1];
   cmpfilename = argv[2];
@@ -78,7 +77,7 @@ int main(int argc, char **argv)
 
   fd_devfile = open(devfilename, O_LARGEFILE | O_NOATIME);
   fd_cmpfile = open(cmpfilename, O_LARGEFILE | O_NOATIME);
-  fd_dstfile = open(dstfilename, O_CREAT | O_LARGEFILE | /*O_TRUNC |*/ O_RDWR, S_IRUSR | S_IWUSR);
+  fd_dstfile = open(dstfilename, O_CREAT | O_LARGEFILE | O_TRUNC | O_RDWR, S_IRUSR | S_IWUSR);
 
   if (fd_devfile < 1)
     pexit("Maybe I failed to open", devfilename);
@@ -109,21 +108,17 @@ int main(int argc, char **argv)
   //seekpos_pre_read = blksize * 15260000L;
   seekpos_pre_read = 0;
 
-  dev_seekpos_pre_read = lseek64(fd_devfile, seekpos_pre_read, SEEK_SET);
-  printf("seekpos_pre_read devfile = %li\n", dev_seekpos_pre_read);
+  dev_seekpos_pre_read = lseek64(fd_devfile, seekpos_pre_read, SEEK_SET); 
   cmp_seekpos_pre_read = lseek64(fd_cmpfile, seekpos_pre_read, SEEK_SET);
-  printf("seekpos_pre_read cmpfile = %li\n", cmp_seekpos_pre_read);
   dst_seekpos_pre_read = lseek64(fd_dstfile, seekpos_pre_read, SEEK_SET);
+  printf("seekpos_pre_read devfile = %li\n", dev_seekpos_pre_read);
+  printf("seekpos_pre_read cmpfile = %li\n", cmp_seekpos_pre_read);  
   printf("seekpos_pre_read dstfile = %li\n", dst_seekpos_pre_read);
-  //exit(1);
-
-  while (1)
-  {
-
+  
+  while (1) {
     seekpos_pre_read = lseek64(fd_devfile, 0, SEEK_CUR);
-    /*
-    if(seekpos_pre_read > 4L*1024*1024*1024) break;
-*/
+    // if(seekpos_pre_read > 4L*1024*1024*1024) break;
+
     sz_1 = read(fd_devfile, inblock1, blksize);
     sz_2 = read(fd_cmpfile, inblock2, blksize);
     if (sz_1 != sz_2)
@@ -132,20 +127,17 @@ int main(int argc, char **argv)
       printf("errno = %d\n", errno);
       pexit("read sizes differ, signal?", " maybe?");
     }
-    if (sz_1 == 0)
-      pexit("Valmis.", "Valmis.");
     compsize = sz_1;
+    if (sz_1 == 0) pexit("Done.", "Done.");   
     if (sz_1 < blksize)
     {
       printf("sz_1 < blksize, viimeinen kierros\n");
       printf("seekpos_pre_read = %li\n", seekpos_pre_read);
       printf("blksize = %d\nsz_1 = %d\nsz2 = %d\n", blksize, sz_1, sz_2);
     }
-    
+
     if (0 != memcmp(inblock1, inblock2, compsize))
     {
-      // käytä writeä
-      //printf("käytä writeä\n");
       if (write(fd_dstfile, inblock1, sz_1) != sz_1)
       {
         printf("Can not handle this. Didn't write everything");
@@ -155,12 +147,11 @@ int main(int argc, char **argv)
     }
     else
     {
-      //printf("käytä dupea %li\n", seekpos_pre_read);
       duparg.dest_offset = seekpos_pre_read;
       duparg.src_offset = seekpos_pre_read;
       duparg.src_fd = fd_cmpfile;
       duparg.src_length = sz_1;
-        
+
       //printf("src_offset %lu dst_offset %lu len %d\n", (long unsigned int)duparg.src_offset, (long unsigned int)duparg.dest_offset, sz_1 );
       long int seekpos_target = lseek64(fd_dstfile, 0, SEEK_CUR);
       //printf("target seekpos = %lu\n", seekpos_target);
@@ -168,8 +159,8 @@ int main(int argc, char **argv)
       dupestatus = ioctl(fd_dstfile, BTRFS_IOC_CLONE_RANGE, &duparg);
       lseek64(fd_dstfile, sz_1, SEEK_CUR);
       if (dupestatus != 0)
-        pexit("eksit", "deksit");
-      
+        pexit("ioctl err", "ioctl err");
+
       c = 'd';
     }
     if (ccount++ > (10240 / multiplier) * 3)
@@ -178,8 +169,6 @@ int main(int argc, char **argv)
       fflush(stdout);
       ccount = 0;
     }
- /*    if (ccount > 5)
-      exit(1);
-  */ }
-  printf("ulos\n");
+  }
+ printf("Out\n");
 }
