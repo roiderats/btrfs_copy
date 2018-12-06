@@ -113,11 +113,11 @@ int main(int argc, char **argv)
   long cmp_seekpos_pre_read = -2;
   long dst_seekpos_pre_read = -2;
 
-  //seekpos_pre_read = blksize * 15260000L;
-  //seekpos_pre_read = 0;
+seekpos_pre_read = 0;
+  //seekpos_pre_read = blksize * 15260000L;  
   // Seek around my test error pos, FIXME
-  //seekpos_pre_read = 346070482944L - (10400*blksize); //329938L * 1024L * 1024L;
-  seekpos_pre_read = 328000L*1024L*1024L;
+  ////seekpos_pre_read = 346070482944L - (10400*blksize); //329938L * 1024L * 1024L;
+  //seekpos_pre_read = 329000L*1024L*1024L;
 
   dev_seekpos_pre_read = lseek64(fd_devfile, seekpos_pre_read, SEEK_SET); 
   cmp_seekpos_pre_read = lseek64(fd_cmpfile, seekpos_pre_read, SEEK_SET);
@@ -142,29 +142,24 @@ int main(int argc, char **argv)
     seekpos_post_read_2 = lseek64(fd_cmpfile, 0, SEEK_CUR);
     if(sz_1==0) 
     {
-      printf("EOF or fatal error, read()s returned %d and %d", sz_1, sz_2);
-      if((sz_2!=0) || (sz_1<0)) printf("sterrror = %s\n", strerror(errno));
+      if((sz_2!=0) || (sz_1<0)) printf("Fatal error. read()s returned %d and %d, sterrror = %s\n", sz_1, sz_2, strerror(errno));
+      else printf("EOF , read()s returned %d and %d", sz_1, sz_2);
       exit(1);
     }
     if (sz_1 != sz_2)
     {
       errcnt++;
-      //if(count>1) count--; // if-part prevents to spur some (10240 for now) progress chars on screen
-      printf("ERR: sz1 and sz2 differ, sz_1=%d sz_2=%d, blksize=%i, errno(%d) str=%s\n", sz_1, sz_2, blksize, errno, strerror(errno));
       if(errcnt < 100) {
         if( seekpos_post_read_1 < blksize ) pexit("exit, sz_1 seekpos < blksize", "uh duh");
 
-        if( seekpos_post_read_1 % blksize == 0 ) { // bail one block
-          bailbytes = blksize;
-        } else { // bail till block border
-          bailbytes = seekpos_post_read_1 % blksize;
+        bailbytes = seekpos_post_read_1 % blksize;
+      
+        if(errcnt % 5 == 0) { // skip block, negative bailbytes
+          putchar('X');          
+          bailbytes -= blksize;
         }
-        if(errcnt % 15 == 15) { // bail another block if possible
-          printf("Bail ANOTHER block, mod15 hit\n");
-          if(seekpos_pre_read >= 2*blksize) bailbytes += blksize;
-        }
+
         seekpos_pre_read -= bailbytes;
-        printf("We sleep and bail %ld bytes to pos %ld\n", bailbytes, seekpos_pre_read);
         usleep(200000);
         l1 = lseek64(fd_devfile, seekpos_pre_read, SEEK_SET);
         l2 = lseek64(fd_cmpfile, seekpos_pre_read, SEEK_SET);
@@ -174,6 +169,7 @@ int main(int argc, char **argv)
         sz_2=0;
         usleep(300000);
         continue; //oh well, we don't need anything that's below actually
+        
       } else {
         pexit("errocount reached 100. quitting.", "duh");
       }
