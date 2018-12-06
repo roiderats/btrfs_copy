@@ -1,3 +1,11 @@
+/*
+
+  vers. 2018-12-06 19:06 Try to seek back and wait when in error. Known not to work
+  
+  TODO: try few times, seek forward
+
+*/
+
 
 #define _GNU_SOURCE
 //#define _LARGEFILE64_SOURCE moikka
@@ -52,7 +60,7 @@ int main(int argc, char **argv)
            printf("v2\n");
            exit(1);
   }
-  int multiplier = 64;
+  int multiplier = 8;
   if (argc > 4)
   {
     multiplier = atoi(argv[4]);
@@ -77,7 +85,7 @@ int main(int argc, char **argv)
 
   fd_devfile = open(devfilename, O_LARGEFILE | O_NOATIME);
   fd_cmpfile = open(cmpfilename, O_LARGEFILE | O_NOATIME);
-  fd_dstfile = open(dstfilename, O_CREAT | O_LARGEFILE | O_TRUNC | O_RDWR, S_IRUSR | S_IWUSR);
+  fd_dstfile = open(dstfilename, O_CREAT | O_LARGEFILE | O_RDWR, S_IRUSR | S_IWUSR);
 
   if (fd_devfile < 1)
     pexit("Maybe I failed to open", devfilename);
@@ -106,7 +114,10 @@ int main(int argc, char **argv)
   long dst_seekpos_pre_read = -2;
 
   //seekpos_pre_read = blksize * 15260000L;
-  seekpos_pre_read = 0;
+  //seekpos_pre_read = 0;
+  // Seek around my test error pos, FIXME
+  //seekpos_pre_read = 346070482944L - (10400*blksize); //329938L * 1024L * 1024L;
+  seekpos_pre_read = 328000L*1024L*1024L;
 
   dev_seekpos_pre_read = lseek64(fd_devfile, seekpos_pre_read, SEEK_SET); 
   cmp_seekpos_pre_read = lseek64(fd_cmpfile, seekpos_pre_read, SEEK_SET);
@@ -115,23 +126,62 @@ int main(int argc, char **argv)
   printf("seekpos_pre_read cmpfile = %li\n", cmp_seekpos_pre_read);  
   printf("seekpos_pre_read dstfile = %li\n", dst_seekpos_pre_read);
   
+  long l1, l2, l3;
+  long bailbytes, seekpos_post_read_1, seekpos_post_read_2, seekpos_post_read_3;
+
+  int errcnt = 0;
   while (1) {
     seekpos_pre_read = lseek64(fd_devfile, 0, SEEK_CUR);
     // if(seekpos_pre_read > 4L*1024*1024*1024) break;
-
+    dev_seekpos_pre_read = lseek64(fd_devfile, seekpos_pre_read, SEEK_SET); 
+    cmp_seekpos_pre_read = lseek64(fd_cmpfile, seekpos_pre_read, SEEK_SET);
+    dst_seekpos_pre_read = lseek64(fd_dstfile, seekpos_pre_read, SEEK_SET);
     sz_1 = read(fd_devfile, inblock1, blksize);
     sz_2 = read(fd_cmpfile, inblock2, blksize);
+    seekpos_post_read_1 = lseek64(fd_devfile, 0, SEEK_CUR);
+    seekpos_post_read_2 = lseek64(fd_cmpfile, 0, SEEK_CUR);
+    if(sz_1==0) 
+    {
+      printf("EOF or fatal error, read()s returned %d and %d", sz_1, sz_2);
+      if((sz_2!=0) || (sz_1<0)) printf("sterrror = %s\n", strerror(errno));
+      exit(1);
+    }
     if (sz_1 != sz_2)
     {
-      printf("sz_1=%d sz_2=%d\n", sz_1, sz_2);
-      printf("errno = %d\n", errno);
-      pexit("read sizes differ, signal?", " maybe?");
+      errcnt++;
+      //if(count>1) count--; // if-part prevents to spur some (10240 for now) progress chars on screen
+      printf("ERR: sz1 and sz2 differ, sz_1=%d sz_2=%d, blksize=%i, errno(%d) str=%s\n", sz_1, sz_2, blksize, errno, strerror(errno));
+      if(errcnt < 100) {
+        if( seekpos_post_read_1 < blksize ) pexit("exit, sz_1 seekpos < blksize", "uh duh");
+
+        if( seekpos_post_read_1 % blksize == 0 ) { // bail one block
+          bailbytes = blksize;
+        } else { // bail till block border
+          bailbytes = seekpos_post_read_1 % blksize;
+        }
+        if(errcnt % 15 == 15) { // bail another block if possible
+          printf("Bail ANOTHER block, mod15 hit\n");
+          if(seekpos_pre_read >= 2*blksize) bailbytes += blksize;
+        }
+        seekpos_pre_read -= bailbytes;
+        printf("We sleep and bail %ld bytes to pos %ld\n", bailbytes, seekpos_pre_read);
+        usleep(200000);
+        l1 = lseek64(fd_devfile, seekpos_pre_read, SEEK_SET);
+        l2 = lseek64(fd_cmpfile, seekpos_pre_read, SEEK_SET);
+        l3 = lseek64(fd_dstfile, seekpos_pre_read, SEEK_SET);        
+        if((l1!=seekpos_pre_read) || (l2!=seekpos_pre_read) || (l1!=seekpos_pre_read)) pexit("Cannot seek","keek ekkekek");
+        sz_1=0;
+        sz_2=0;
+        usleep(300000);
+        continue; //oh well, we don't need anything that's below actually
+      } else {
+        pexit("errocount reached 100. quitting.", "duh");
+      }
     }
     compsize = sz_1;
-    if (sz_1 == 0) pexit("Done.", "Done.");   
     if (sz_1 < blksize)
     {
-      printf("sz_1 < blksize, viimeinen kierros\n");
+      printf("sz_1 < blksize, maybe last block maybe not\n");
       printf("seekpos_pre_read = %li\n", seekpos_pre_read);
       printf("blksize = %d\nsz_1 = %d\nsz2 = %d\n", blksize, sz_1, sz_2);
     }
@@ -157,7 +207,11 @@ int main(int argc, char **argv)
       //printf("target seekpos = %lu\n", seekpos_target);
 
       dupestatus = ioctl(fd_dstfile, BTRFS_IOC_CLONE_RANGE, &duparg);
-      lseek64(fd_dstfile, sz_1, SEEK_CUR);
+      // move destination file seekpos forward just like write()      
+      seekpos_post_read_1 = lseek64(fd_dstfile, sz_1, SEEK_CUR);
+      // and copy that to other files
+      lseek64(fd_devfile, seekpos_post_read_1, SEEK_SET);
+      lseek64(fd_cmpfile, seekpos_post_read_1, SEEK_SET);
       if (dupestatus != 0)
         pexit("ioctl err", "ioctl err");
 
