@@ -113,11 +113,7 @@ int main(int argc, char **argv)
   long cmp_seekpos_pre_read = -2;
   long dst_seekpos_pre_read = -2;
 
-seekpos_pre_read = 0;
-  //seekpos_pre_read = blksize * 15260000L;  
-  // Seek around my test error pos, FIXME
-  ////seekpos_pre_read = 346070482944L - (10400*blksize); //329938L * 1024L * 1024L;
-  //seekpos_pre_read = 329000L*1024L*1024L;
+  seekpos_pre_read = 0;
 
   dev_seekpos_pre_read = lseek64(fd_devfile, seekpos_pre_read, SEEK_SET); 
   cmp_seekpos_pre_read = lseek64(fd_cmpfile, seekpos_pre_read, SEEK_SET);
