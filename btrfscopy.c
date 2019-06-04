@@ -52,12 +52,12 @@ int main(int argc, char **argv)
                "when possible so that diff_source blocks are referred to.\n");
         printf("multiplier = os.blocksize * multiplier=transfersize\n");
 #ifdef JADDAJADDA
-           "samefs = 'y' also deduplicate against real_source that must reside in same fs as diff_source and target");
+        //   "samefs = 'y' also deduplicate against real_source that must reside in same fs as diff_source and target");
 #endif
-           printf("\nPreconditions: diff_source and target must be on same BTRFS filesystem, unpredictable amount of hard disk space is needed\n");
-           printf("\nBlock size is %d (fixed in this version)\n", blksize);
-           printf("v2\n");
-           exit(1);
+        printf("\nPreconditions: diff_source and target must be on same BTRFS filesystem, unpredictable amount of hard disk space is needed\n");
+        printf("\nBlock size is %d (fixed in this version)\n", blksize);
+        printf("v2\n");
+        exit(1);
     }
     int multiplier = 8;
     if (argc > 4)
@@ -103,6 +103,8 @@ int main(int argc, char **argv)
     struct btrfs_ioctl_clone_range_args duparg;
     int ccount = 0;
     char c;
+    char errstr[160];
+
 
     compsize = blksize;
     duparg.src_fd = fd_cmpfile;
@@ -134,6 +136,12 @@ int main(int argc, char **argv)
         dst_seekpos_pre_read = lseek64(fd_dstfile, seekpos_pre_read, SEEK_SET);
         sz_1 = read(fd_devfile, inblock1, blksize);
         sz_2 = read(fd_cmpfile, inblock2, blksize);
+        if (sz_1 != sz_2)
+        {
+            printf("sz_1=%d sz_2=%d\n", sz_1, sz_2);
+            printf("errno = %d\n", errno);
+            pexit("read sizes differ, signal?", " maybe?");
+        }
         seekpos_post_read_1 = lseek64(fd_devfile, 0, SEEK_CUR);
         seekpos_post_read_2 = lseek64(fd_cmpfile, 0, SEEK_CUR);
         if (sz_1 == 0)
@@ -212,7 +220,11 @@ int main(int argc, char **argv)
             lseek64(fd_devfile, seekpos_post_read_1, SEEK_SET);
             lseek64(fd_cmpfile, seekpos_post_read_1, SEEK_SET);
             if (dupestatus != 0)
-                pexit("ioctl err", "ioctl err");
+            {
+                snprintf(errstr, sizeof(errstr), "ioctl retval %u", dupestatus);
+                errstr[sizeof(errstr) - 1] = 0;
+                pexit("BTRFS_IOC_CLONE_RANGE fail", errstr);
+            }
 
             c = 'd';
         }
