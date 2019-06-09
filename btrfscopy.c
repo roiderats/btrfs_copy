@@ -6,6 +6,8 @@
 
 */
 
+#define TEST_READTARGET
+
 #define _GNU_SOURCE
 //#define _LARGEFILE64_SOURCE moikka
 #include <stdio.h>
@@ -36,7 +38,7 @@ void pexit(const char *s1, const char *s2)
 
 int main(int argc, char **argv)
 {
-    char *inblock1, *inblock2;
+    char *inblock1, *inblock2, *inblock3;
     long seekpos;
     int blksize;
     int fd_devfile, fd_cmpfile, fd_dstfile;
@@ -77,7 +79,8 @@ int main(int argc, char **argv)
 
     inblock1 = malloc(blksize);
     inblock2 = malloc(blksize);
-    if ((!inblock1) || (!inblock2))
+    inblock3 = malloc(blksize);
+    if ((!inblock1) || (!inblock2) || (!inblock2))
         pexit("out of mem", "oUt oF mEm");
 
     printf("blksize=%d\n", blksize);
@@ -96,7 +99,7 @@ int main(int argc, char **argv)
     printf("open %s ok\n", cmpfilename);
     printf("open %s ok\n", dstfilename);
 
-    int sz_1, sz_2, i;
+    int sz_1, sz_2, sz_3, i;
     int compsize;
     long seekpos_pre_read;
     int dupestatus;
@@ -125,6 +128,11 @@ int main(int argc, char **argv)
     long l1, l2, l3;
     long bailbytes, seekpos_post_read_1, seekpos_post_read_2, seekpos_post_read_3;
 
+#ifdef TEST_READTARGET
+    int readtarget = 1;
+#else
+    //int readtarget = 0;
+#endif
     int errcnt = 0;
     while (1)
     {
@@ -135,8 +143,19 @@ int main(int argc, char **argv)
         dst_seekpos_pre_read = lseek64(fd_dstfile, seekpos_pre_read, SEEK_SET);
         sz_1 = read(fd_devfile, inblock1, blksize);
         sz_2 = read(fd_cmpfile, inblock2, blksize);
+#ifdef TEST_READTARGET
+        if(readtarget) {
+            sz_3 = read(fd_dstfile, inblock3, blksize);
+            if (sz_3 < blksize) {
+                readtarget = 0;
+                printf("readtarget drops to 0\n");
+            }
+            seekpos_post_read_3 = lseek64(fd_dstfile, seekpos_pre_read, SEEK_SET);
+        }
+#endif
         seekpos_post_read_1 = lseek64(fd_devfile, 0, SEEK_CUR);
         seekpos_post_read_2 = lseek64(fd_cmpfile, 0, SEEK_CUR);
+        
         if (sz_1 == 0)
         {
             if ((sz_2 != 0) || (sz_1 < 0))
@@ -186,39 +205,45 @@ int main(int argc, char **argv)
             printf("blksize = %d\nsz_1 = %d\nsz2 = %d\n", blksize, sz_1, sz_2);
         }
 
-        if (0 != memcmp(inblock1, inblock2, compsize))
-        {
-            if (write(fd_dstfile, inblock1, sz_1) != sz_1)
-            {
-                printf("Can not handle this. Didn't write everything");
-                pexit("write failed.", "ump ump");
-            };
-            c = 'w';
-        }
-        else
-        {
-            duparg.dest_offset = seekpos_pre_read;
-            duparg.src_offset = seekpos_pre_read;
-            duparg.src_fd = fd_cmpfile;
-            duparg.src_length = sz_1;
+        
+        if((readtarget) && (0 == memcmp(inblock1, inblock3, compsize))) {
+            lseek64(fd_dstfile, sz_1, SEEK_CUR); // not even necessary (yet?)
+            c = 'S';
+        } else {
+            if (0 != memcmp(inblock1, inblock2, compsize))
+            {            
+                if (write(fd_dstfile, inblock1, sz_1) != sz_1)
+                {
+                    printf("Can not handle this. Didn't write everything");
+                    pexit("write failed.", "ump ump");
+                };
+                c = 'w';
+            }         
+            else
+            {            
+                duparg.dest_offset = seekpos_pre_read;
+                duparg.src_offset = seekpos_pre_read;
+                duparg.src_fd = fd_cmpfile;
+                duparg.src_length = sz_1;
 
-            //printf("src_offset %lu dst_offset %lu len %d\n", (long unsigned int)duparg.src_offset, (long unsigned int)duparg.dest_offset, sz_1 );
-            long int seekpos_target = lseek64(fd_dstfile, 0, SEEK_CUR);
-            //printf("target seekpos = %lu\n", seekpos_target);
+                //printf("src_offset %lu dst_offset %lu len %d\n", (long unsigned int)duparg.src_offset, (long unsigned int)duparg.dest_offset, sz_1 );
+                long int seekpos_target = lseek64(fd_dstfile, 0, SEEK_CUR);
+                //printf("target seekpos = %lu\n", seekpos_target);
 
-            dupestatus = ioctl(fd_dstfile, BTRFS_IOC_CLONE_RANGE, &duparg);
-            // move destination file seekpos forward just like write()
-            seekpos_post_read_1 = lseek64(fd_dstfile, sz_1, SEEK_CUR);
-            // and copy that to other files
-            lseek64(fd_devfile, seekpos_post_read_1, SEEK_SET);
-            lseek64(fd_cmpfile, seekpos_post_read_1, SEEK_SET);
-            if (dupestatus != 0)
-            {
-                snprintf(errstr, sizeof(errstr), "ioctl retval %u", dupestatus);
-                errstr[sizeof(errstr) - 1] = 0;
-                pexit("BTRFS_IOC_CLONE_RANGE fail", errstr);
+                dupestatus = ioctl(fd_dstfile, BTRFS_IOC_CLONE_RANGE, &duparg);
+                // move destination file seekpos forward just like write()
+                seekpos_post_read_1 = lseek64(fd_dstfile, sz_1, SEEK_CUR);
+                // and copy that to other files
+                lseek64(fd_devfile, seekpos_post_read_1, SEEK_SET);
+                lseek64(fd_cmpfile, seekpos_post_read_1, SEEK_SET);
+                if (dupestatus != 0)
+                {
+                    snprintf(errstr, sizeof(errstr), "ioctl retval %u", dupestatus);
+                    errstr[sizeof(errstr) - 1] = 0;
+                    pexit("BTRFS_IOC_CLONE_RANGE fail", errstr);
+                }
+                c = 'd';
             }
-            c = 'd';
         }
         if (ccount++ > (10240 / multiplier) * 3)
         {
