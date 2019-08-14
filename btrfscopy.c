@@ -89,6 +89,11 @@ int main(int argc, char **argv)
     fd_cmpfile = open(cmpfilename, O_LARGEFILE | O_NOATIME);
     fd_dstfile = open(dstfilename, O_CREAT | O_LARGEFILE | O_RDWR, S_IRUSR | S_IWUSR);
 
+    if(posix_fadvise(fd_devfile, 0, 0, POSIX_FADV_SEQUENTIAL))
+        pexit("posix_fadvise() failed", devfilename);
+    if(posix_fadvise(fd_cmpfile, 0, 0, POSIX_FADV_SEQUENTIAL))
+        pexit("posix_fadvise() failed", cmpfilename);
+
     if (fd_devfile < 1)
         pexit("Maybe I failed to open", devfilename);
     if (fd_cmpfile < 1)
@@ -218,6 +223,8 @@ int main(int argc, char **argv)
                     pexit("write failed.", "ump ump");
                 };
                 c = 'w';
+                //if(posix_fadvise(fd_dstfile, dst_seekpos_pre_read, sz_1, POSIX_FADV_DONTNEED))
+                //    pexit("posix_fadvise() failed", dstfilename);
             }         
             else
             {            
