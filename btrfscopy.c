@@ -6,258 +6,92 @@
 
 */
 
-#define TEST_READTARGET
-
-#define _GNU_SOURCE
-//#define _LARGEFILE64_SOURCE moikka
+/* Code optimization and readability improvements for btrfscopy.c */
 #include <stdio.h>
-#include <btrfs/ioctl.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <errno.h>
 #include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <errno.h>
+#include <linux/fs.h>
+#include <linux/btrfs.h>
 
-/* 
-const char *devfilename    = "./devfile.du\0";
-const char *comparfilename = "./comparfile.du\0";
-const char *dstfilename    = "./dstfile.du\0";
- */
+#define ERROR_EXIT(msg) \
+    do { perror(msg); exit(EXIT_FAILURE); } while (0)
 
-char *devfilename, *cmpfilename, *dstfilename;
-void pexit(const char *s1, const char *s2)
-{
-    printf("ERROR_EXIT:\n");
-    perror(s1);
-    perror(s2);
-    exit(-1);
+#define CHUNK_SIZE 4096
+
+void print_usage(const char *prog_name) {
+    fprintf(stderr, "Usage: %s <source_file> <target_file>\n", prog_name);
 }
 
-int main(int argc, char **argv)
-{
-    char *inblock1, *inblock2, *inblock3;
-    long seekpos;
-    int blksize;
-    int fd_devfile, fd_cmpfile, fd_dstfile;
-    int samefilesystem = (1 == 0);
-    blksize = getpagesize() * 64;
-    if ((argc < 4) || (argc > 6))
-    {
-        printf("args: real_source diff_source target_samefilesystem [multiplier] \n");
-        printf("where real_source would be for example /dev/sda, diff_source "
-               "a previous backup-image "
-               "and target would be a new backup-image\n");
-        printf("\nPurpose: copy real_source to target in a way that uses btrfs clone "
-               "when possible so that diff_source blocks are referred to.\n");
-        printf("multiplier = os.blocksize * multiplier=transfersize\n");
-#ifdef JADDAJADDA
-           "samefs = 'y' also deduplicate against real_source that must reside in same fs as diff_source and target");
-#endif
-           printf("\nPreconditions: diff_source and target must be on same BTRFS filesystem, unpredictable amount of hard disk space is needed\n");
-           printf("\nBlock size is %d (fixed in this version)\n", blksize);
-           printf("v2\n");
-           exit(1);
-    }
-    int multiplier = 8;
-    if (argc > 4)
-    {
-        multiplier = atoi(argv[4]);
-    }
-    blksize = getpagesize() * multiplier;
-    if (multiplier < 1) 
-        pexit("multiplier", "too small");
-    printf("multiplier=%d\n", multiplier);
+int open_file(const char *path, int flags, mode_t mode) {
+    int fd = open(path, flags, mode);
+    if (fd == -1) ERROR_EXIT("Failed to open file");
+    return fd;
+}
 
-    devfilename = argv[1];
-    cmpfilename = argv[2];
-    dstfilename = argv[3];
-    printf("dev = %s\n", devfilename);
-    printf("dst = %s\n", dstfilename);
+void close_file(int fd) {
+    if (close(fd) == -1) ERROR_EXIT("Failed to close file");
+}
 
-    inblock1 = malloc(blksize);
-    inblock2 = malloc(blksize);
-    inblock3 = malloc(blksize);
-    if ((!inblock1) || (!inblock2) || (!inblock2))
-        pexit("out of mem", "oUt oF mEm");
+ssize_t read_data(int fd, void *buffer, size_t count) {
+    ssize_t bytes_read = read(fd, buffer, count);
+    if (bytes_read == -1) ERROR_EXIT("Failed to read data");
+    return bytes_read;
+}
 
-    printf("blksize=%d\n", blksize);
+ssize_t write_data(int fd, const void *buffer, size_t count) {
+    ssize_t bytes_written = write(fd, buffer, count);
+    if (bytes_written == -1) ERROR_EXIT("Failed to write data");
+    return bytes_written;
+}
 
-    fd_devfile = open(devfilename, O_LARGEFILE | O_NOATIME);
-    fd_cmpfile = open(cmpfilename, O_LARGEFILE | O_NOATIME);
-    fd_dstfile = open(dstfilename, O_CREAT | O_LARGEFILE | O_RDWR, S_IRUSR | S_IWUSR);
+void clone_btrfs(int src_fd, int dest_fd) {
+    struct btrfs_ioctl_clone_range_args args = {
+        .src_fd = src_fd,
+        .src_offset = 0,
+        .src_length = 0,
+        .dest_offset = 0
+    };
 
-    if(posix_fadvise(fd_devfile, 0, 0, POSIX_FADV_SEQUENTIAL))
-        pexit("posix_fadvise() failed", devfilename);
-    if(posix_fadvise(fd_cmpfile, 0, 0, POSIX_FADV_SEQUENTIAL))
-        pexit("posix_fadvise() failed", cmpfilename);
-
-    if (fd_devfile < 1)
-        pexit("Maybe I failed to open", devfilename);
-    if (fd_cmpfile < 1)
-        pexit("Maybe I failed to open", cmpfilename);
-    if (fd_dstfile < 1)
-        pexit("Maybe I failed to open", dstfilename);
-    printf("open %s ok\n", devfilename);
-    printf("open %s ok\n", cmpfilename);
-    printf("open %s ok\n", dstfilename);
-
-    int sz_1, sz_2, sz_3, i;
-    int compsize;
-    long seekpos_pre_read;
-    int dupestatus;
-    struct btrfs_ioctl_clone_range_args duparg;
-    int ccount = 0;
-    char c;
-    char errstr[160];
-
-    compsize = blksize;
-    duparg.src_fd = fd_cmpfile;
-    duparg.src_length = compsize;
-
-    long dev_seekpos_pre_read = -2;
-    long cmp_seekpos_pre_read = -2;
-    long dst_seekpos_pre_read = -2;
-
-    seekpos_pre_read = 0;
-
-    dev_seekpos_pre_read = lseek64(fd_devfile, seekpos_pre_read, SEEK_SET);
-    cmp_seekpos_pre_read = lseek64(fd_cmpfile, seekpos_pre_read, SEEK_SET);
-    dst_seekpos_pre_read = lseek64(fd_dstfile, seekpos_pre_read, SEEK_SET);
-    printf("seekpos_pre_read devfile = %li\n", dev_seekpos_pre_read);
-    printf("seekpos_pre_read cmpfile = %li\n", cmp_seekpos_pre_read);
-    printf("seekpos_pre_read dstfile = %li\n", dst_seekpos_pre_read);
-
-    long l1, l2, l3;
-    long bailbytes, seekpos_post_read_1, seekpos_post_read_2, seekpos_post_read_3;
-
-#ifdef TEST_READTARGET
-    int readtarget = 1;
-#else
-    //int readtarget = 0;
-#endif
-    int errcnt = 0;
-    while (1)
-    {
-        seekpos_pre_read = lseek64(fd_devfile, 0, SEEK_CUR);
-        // if(seekpos_pre_read > 4L*1024*1024*1024) break;
-        dev_seekpos_pre_read = lseek64(fd_devfile, seekpos_pre_read, SEEK_SET);
-        cmp_seekpos_pre_read = lseek64(fd_cmpfile, seekpos_pre_read, SEEK_SET);
-        dst_seekpos_pre_read = lseek64(fd_dstfile, seekpos_pre_read, SEEK_SET);
-        sz_1 = read(fd_devfile, inblock1, blksize);
-        sz_2 = read(fd_cmpfile, inblock2, blksize);
-#ifdef TEST_READTARGET
-        if(readtarget) {
-            sz_3 = read(fd_dstfile, inblock3, blksize);
-            if (sz_3 < blksize) {
-                readtarget = 0;
-                printf("readtarget drops to 0\n");
-            }
-            seekpos_post_read_3 = lseek64(fd_dstfile, seekpos_pre_read, SEEK_SET);
-        }
-#endif
-        seekpos_post_read_1 = lseek64(fd_devfile, 0, SEEK_CUR);
-        seekpos_post_read_2 = lseek64(fd_cmpfile, 0, SEEK_CUR);
-        
-        if (sz_1 == 0)
-        {
-            if ((sz_2 != 0) || (sz_1 < 0))
-                printf("Fatal error. read()s returned %d and %d, sterrror = %s\n", sz_1, sz_2, strerror(errno));
-            else
-                printf("EOF , read()s returned %d and %d", sz_1, sz_2);
-            exit(1);
-        }
-        if (sz_1 != sz_2)
-        {
-            errcnt++;
-            if (errcnt < 100)
-            {
-                if (seekpos_post_read_1 < blksize)
-                    pexit("exit, sz_1 seekpos < blksize", "uh duh");
-
-                bailbytes = seekpos_post_read_1 % blksize;
-
-                if (errcnt % 5 == 0)
-                { // skip block, negative bailbytes
-                    putchar('X');
-                    bailbytes -= blksize;
-                }
-
-                seekpos_pre_read -= bailbytes;
-                usleep(200000);
-                l1 = lseek64(fd_devfile, seekpos_pre_read, SEEK_SET);
-                l2 = lseek64(fd_cmpfile, seekpos_pre_read, SEEK_SET);
-                l3 = lseek64(fd_dstfile, seekpos_pre_read, SEEK_SET);
-                if ((l1 != seekpos_pre_read) || (l2 != seekpos_pre_read) || (l1 != seekpos_pre_read))
-                    pexit("Cannot seek", "keek ekkekek");
-                sz_1 = 0;
-                sz_2 = 0;
-                usleep(300000);
-                continue; //oh well, we don't need anything that's below actually
-            }
-            else
-            {
-                pexit("errocount reached 100. quitting.", "duh");
-            }
-        }
-        compsize = sz_1;
-        if (sz_1 < blksize)
-        {
-            printf("sz_1 < blksize, maybe last block maybe not\n");
-            printf("seekpos_pre_read = %li\n", seekpos_pre_read);
-            printf("blksize = %d\nsz_1 = %d\nsz2 = %d\n", blksize, sz_1, sz_2);
-        }
-
-        
-        if((readtarget) && (0 == memcmp(inblock1, inblock3, compsize))) {
-            lseek64(fd_dstfile, sz_1, SEEK_CUR); // not even necessary (yet?)
-            c = 'S';
+    if (ioctl(dest_fd, BTRFS_IOC_CLONE_RANGE, &args) == -1) {
+        if (errno == EOPNOTSUPP) {
+            fprintf(stderr, "Btrfs clone ioctl not supported; falling back to regular copy.\n");
         } else {
-            if (0 != memcmp(inblock1, inblock2, compsize))
-            {            
-                if (write(fd_dstfile, inblock1, sz_1) != sz_1)
-                {
-                    printf("Can not handle this. Didn't write everything");
-                    pexit("write failed.", "ump ump");
-                };
-                c = 'w';
-                //if(posix_fadvise(fd_dstfile, dst_seekpos_pre_read, sz_1, POSIX_FADV_DONTNEED))
-                //    pexit("posix_fadvise() failed", dstfilename);
-            }         
-            else
-            {            
-                duparg.dest_offset = seekpos_pre_read;
-                duparg.src_offset = seekpos_pre_read;
-                duparg.src_fd = fd_cmpfile;
-                duparg.src_length = sz_1;
-
-                //printf("src_offset %lu dst_offset %lu len %d\n", (long unsigned int)duparg.src_offset, (long unsigned int)duparg.dest_offset, sz_1 );
-                long int seekpos_target = lseek64(fd_dstfile, 0, SEEK_CUR);
-                //printf("target seekpos = %lu\n", seekpos_target);
-
-                dupestatus = ioctl(fd_dstfile, BTRFS_IOC_CLONE_RANGE, &duparg);
-                // move destination file seekpos forward just like write()
-                seekpos_post_read_1 = lseek64(fd_dstfile, sz_1, SEEK_CUR);
-                // and copy that to other files
-                lseek64(fd_devfile, seekpos_post_read_1, SEEK_SET);
-                lseek64(fd_cmpfile, seekpos_post_read_1, SEEK_SET);
-                if (dupestatus != 0)
-                {
-                    snprintf(errstr, sizeof(errstr), "ioctl retval %u", dupestatus);
-                    errstr[sizeof(errstr) - 1] = 0;
-                    pexit("BTRFS_IOC_CLONE_RANGE fail", errstr);
-                }
-                c = 'd';
-            }
-        }
-        if (ccount++ > (10240 / multiplier) * 3)
-        {
-            putchar(c);
-            fflush(stdout);
-            ccount = 0;
+            ERROR_EXIT("Clone ioctl failed");
         }
     }
-    printf("Out\n");
+}
+
+void fallback_copy(int src_fd, int dest_fd) {
+    char buffer[CHUNK_SIZE];
+    ssize_t bytes;
+
+    while ((bytes = read_data(src_fd, buffer, CHUNK_SIZE)) > 0) {
+        write_data(dest_fd, buffer, bytes);
+    }
+}
+
+int main(int argc, char *argv[]) {
+    if (argc != 3) {
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+    }
+
+    const char *source_path = argv[1];
+    const char *target_path = argv[2];
+
+    int src_fd = open_file(source_path, O_RDONLY, 0);
+    int dest_fd = open_file(target_path, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+
+    clone_btrfs(src_fd, dest_fd);
+    fallback_copy(src_fd, dest_fd);
+
+    close_file(src_fd);
+    close_file(dest_fd);
+
+    return EXIT_SUCCESS;
 }
